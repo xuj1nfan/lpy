@@ -1,7 +1,4 @@
 # lpy
-
-本项目以 GNU General Public License v3.0（GPL-3.0-only）发布，详见 [LICENSE](LICENSE)。
-
 `lpy` 把 Python callable 变成严格柯里化的 `Lambda`，可以直接参与普通 Python 程序；每个对象同时保留一个基于 De Bruijn indices 的 Lambda 演算视图。
 
 ## Python 中直接使用
