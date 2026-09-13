@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ast
-from enum import Enum
 import functools
 import inspect
 import operator
 import textwrap
-from typing import Any, Callable, TypeVar, overload
+from collections.abc import Callable
+from enum import Enum
+from typing import Any, Generic, ParamSpec, Protocol, TypeVar, cast, overload
 
 from .core import Abs, App, Host, Term, Var, _free_names
 
@@ -25,7 +26,28 @@ class SymbolicAnalysisError(Exception):
     """Internal signal that a Python body cannot be represented safely."""
 
 
-class Lambda:
+InputT_contra = TypeVar("InputT_contra", contravariant=True)
+OutputT_co = TypeVar("OutputT_co", covariant=True)
+SourceT = TypeVar("SourceT")
+MiddleT = TypeVar("MiddleT")
+TargetT = TypeVar("TargetT")
+SecondInputT = TypeVar("SecondInputT")
+ThirdInputT = TypeVar("ThirdInputT")
+
+
+class _Composable(Protocol[InputT_contra, OutputT_co]):
+    """Static shape accepted on the right of Lambda composition."""
+
+    @property
+    def term(self) -> Term: ...
+
+    @property
+    def remaining_arity(self) -> int: ...
+
+    def __call__(self, argument: InputT_contra, /) -> OutputT_co: ...
+
+
+class Lambda(Generic[InputT_contra, OutputT_co]):
     """A strictly curried Python callable with a symbolic lambda term."""
 
     def __init__(
@@ -79,6 +101,12 @@ class Lambda:
         )
         return inspect.Signature((parameter,))
 
+    @overload
+    def __call__(self, argument: InputT_contra, /) -> OutputT_co: ...
+
+    @overload
+    def __call__(self, argument: Term, /) -> Term: ...
+
     def __call__(self, *arguments: Any, **keywords: Any) -> Any:
         if keywords or len(arguments) != 1:
             raise TypeError(
@@ -90,7 +118,7 @@ class Lambda:
         if isinstance(argument, Term):
             return App(self._term, argument)
 
-        next_arguments = self._bound_arguments + (argument,)
+        next_arguments = (*self._bound_arguments, argument)
         if len(next_arguments) == self.arity:
             return self._function(*next_arguments)
 
@@ -106,7 +134,10 @@ class Lambda:
             next_arguments,
         )
 
-    def __matmul__(self, other: object) -> Lambda:
+    def __matmul__(
+        self: Lambda[MiddleT, TargetT],
+        other: _Composable[SourceT, MiddleT],
+    ) -> Lambda[SourceT, TargetT]:
         if not isinstance(other, Lambda):
             return NotImplemented
         if self.remaining_arity != 1 or other.remaining_arity != 1:
@@ -391,7 +422,7 @@ def _expression_from_source(
             raise SymbolicAnalysisError("only a single return expression is symbolic")
         return body[0].value
 
-    candidates = []
+    lambda_candidates: list[ast.Lambda] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Lambda):
             continue
@@ -400,16 +431,16 @@ def _expression_from_source(
         except SymbolicAnalysisError:
             continue
         if names == parameter_names:
-            candidates.append(node)
-    if len(candidates) != 1:
+            lambda_candidates.append(node)
+    if len(lambda_candidates) != 1:
         raise SymbolicAnalysisError("could not uniquely identify the lambda expression")
-    return candidates[0].body
+    return lambda_candidates[0].body
 
 
 def _namespace(function: Callable[..., Any]) -> dict[str, Any]:
     try:
         closure = inspect.getclosurevars(function)
-    except TypeError:
+    except (TypeError, ValueError):
         return {}
     return {
         **closure.builtins,
@@ -436,32 +467,105 @@ def _analyze(
         return _opaque_term(function, parameters), SymbolicKind.OPAQUE, str(error)
 
 
-F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class LambdaDecorator(Protocol):
+    """Typing interface for ``@lam(...)`` decorator factories."""
+
+    @overload
+    def __call__(
+        self,
+        function: Callable[[InputT_contra], OutputT_co],
+        /,
+    ) -> Lambda[InputT_contra, OutputT_co]: ...
+
+    @overload
+    def __call__(
+        self,
+        function: Callable[[InputT_contra, SecondInputT], OutputT_co],
+        /,
+    ) -> Lambda[InputT_contra, Lambda[SecondInputT, OutputT_co]]: ...
+
+    @overload
+    def __call__(
+        self,
+        function: Callable[
+            [InputT_contra, SecondInputT, ThirdInputT],
+            OutputT_co,
+        ],
+        /,
+    ) -> Lambda[
+        InputT_contra,
+        Lambda[SecondInputT, Lambda[ThirdInputT, OutputT_co]],
+    ]: ...
+
+    def __call__(self, function: Callable[P, R], /) -> Lambda[Any, R]: ...
 
 
 @overload
-def lam(function: F, *, term: Term | None = None) -> Lambda: ...
+def lam(
+    function: Callable[
+        [InputT_contra, SecondInputT, ThirdInputT],
+        OutputT_co,
+    ],
+    *,
+    term: Term | None = None,
+) -> Lambda[
+    InputT_contra,
+    Lambda[SecondInputT, Lambda[ThirdInputT, OutputT_co]],
+]: ...
 
 
 @overload
-def lam(function: None = None, *, term: Term | None = None) -> Callable[[F], Lambda]: ...
+def lam(
+    function: Callable[[InputT_contra, SecondInputT], OutputT_co],
+    *,
+    term: Term | None = None,
+) -> Lambda[InputT_contra, Lambda[SecondInputT, OutputT_co]]: ...
+
+
+@overload
+def lam(
+    function: Callable[[InputT_contra], OutputT_co],
+    *,
+    term: Term | None = None,
+) -> Lambda[InputT_contra, OutputT_co]: ...
+
+
+@overload
+def lam(
+    function: Callable[P, R],
+    *,
+    term: Term | None = None,
+) -> Lambda[Any, R]: ...
+
+
+@overload
+def lam(
+    function: None = None,
+    *,
+    term: Term | None = None,
+) -> LambdaDecorator: ...
 
 
 def lam(
     function: Callable[..., Any] | None = None, *, term: Term | None = None
-) -> Lambda | Callable[[F], Lambda]:
+) -> Lambda[Any, Any] | LambdaDecorator:
     """Wrap a Python callable as a strictly curried :class:`Lambda`."""
 
-    def decorate(target: F) -> Lambda:
+    def decorate(target: Callable[P, R]) -> Lambda[Any, R]:
         if not callable(target):
             raise TypeError("lam() requires a callable")
         parameters = _validated_parameters(target)
         if term is not None:
             if not isinstance(term, Term):
                 raise TypeError("term= must be a Term")
-            if term.abstraction_arity != len(parameters):
+            if term.abstraction_arity < len(parameters):
                 raise ValueError(
-                    "term= must have exactly one outer abstraction per Python parameter"
+                    "term= must have at least one outer abstraction per "
+                    "Python parameter"
                 )
             kind = SymbolicKind.EXTENDED if term.contains_host else SymbolicKind.PURE
             symbolic_term, reason = term, None
@@ -470,7 +574,7 @@ def lam(
         return Lambda(target, parameters, symbolic_term, kind, reason)
 
     if function is None:
-        return decorate
+        return cast(LambdaDecorator, decorate)
     return decorate(function)
 
 

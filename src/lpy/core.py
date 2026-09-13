@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
-import re
-from typing import Any, Iterator, Union
-
+from typing import Any
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*'*\Z")
 
@@ -85,7 +85,7 @@ class _Host:
         return hash((_Host, id(self.value)))
 
 
-_Node = Union[_Free, _Bound, _Abs, _App, _Host]
+_Node = _Free | _Bound | _Abs | _App | _Host
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +125,7 @@ class DBHost:
         return hash((DBHost, id(self.value)))
 
 
-DBTerm = Union[DBFree, DBBound, DBAbstraction, DBApplication, DBHost]
+DBTerm = DBFree | DBBound | DBAbstraction | DBApplication | DBHost
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,7 +460,7 @@ def _render(node: _Node, env: tuple[str, ...], used: set[str]) -> str:
         return f"@python[{node.label}]"
     if isinstance(node, _Abs):
         name = _fresh(node.hint, used)
-        body = _render(node.body, env + (name,), used | {name})
+        body = _render(node.body, (*env, name), used | {name})
         return f"\\{name}. {body}"
     left = _render(node.function, env, used)
     right = _render(node.argument, env, used)

@@ -12,7 +12,6 @@ from lpy import (
     parse,
 )
 
-
 identity = lam(lambda x: x)
 increment = lam(lambda x: x + 1)
 double = lam(lambda x: x * 2)
@@ -101,7 +100,9 @@ def test_host_nodes_never_execute_during_normalization():
     assert term.normalize() == term
     assert calls == []
     assert isinstance(Host(host_function).to_debruijn(), DBHost)
-    other_function = lambda value: value
+    def other_function(value):
+        return value
+
     assert Host(host_function, "same") != Host(other_function, "same")
     assert Host(host_function, "same").to_debruijn() != Host(
         other_function, "same"
@@ -115,6 +116,14 @@ def test_explicit_term_arity_and_signature_validation():
         lam(lambda x=1: x)
     with pytest.raises(TypeError):
         lam(lambda *items: items)
+
+
+def test_explicit_term_can_encode_a_symbolic_result():
+    encoded = lam(lambda value: value, term=parse(r"\x. \project. project x"))
+    assert encoded(4) == 4
+    assert encoded(Var("item")).normalize() == parse(
+        r"\project. project item"
+    )
 
 
 def test_callable_results_are_not_automatically_wrapped():

@@ -1,7 +1,6 @@
 import pytest
 
 from lpy import (
-    Abs,
     App,
     DBAbstraction,
     DBApplication,
