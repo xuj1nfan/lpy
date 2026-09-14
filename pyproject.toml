@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Curried Python callables with Lambda-calculus and category-theory views"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "lpy contributors" }]
 classifiers = [
